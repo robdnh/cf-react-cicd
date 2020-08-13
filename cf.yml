@@ -1,0 +1,387 @@
+Parameters:
+  WebBucketName:
+    Type: String
+    Description: Enter a name for the S3 bucket hosting web content.
+    Default: rbrtdnh
+  
+  CloudfrontAlias:
+    Type: String
+    Description: Enter an alias for your cloudfront distributions
+    Default: dev.rbrtdnh.com
+  
+  CodecommitRepo:
+    Type: String
+    Description: Enter the name of the Codecommit repository associated with your web content.
+    Default: robdnh-portfolio-site
+    
+Resources:
+  S3WebStoreProd:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName:
+        Fn::Join:
+          - ''
+          - - Ref: WebBucketName
+            - '-prod-'
+            - Ref: 'AWS::AccountId'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicPolicy: False
+        RestrictPublicBuckets: False
+
+  S3WebStoreDev:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName:
+        Fn::Join:
+          - ''
+          - - Ref: WebBucketName
+            - '-dev-'
+            - Ref: 'AWS::AccountId'
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicPolicy: False
+        RestrictPublicBuckets: False
+  
+  S3WebBucketPolicyProd:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: 
+        Ref: S3WebStoreProd
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+            - 's3:GetObject'
+            Effect: Allow
+            Principal: "*"
+            Resource:
+              Fn::Sub:
+                - "arn:aws:s3:::${S3Bucket}/*"
+                - S3Bucket:
+                    Ref: S3WebStoreProd
+
+  S3WebBucketPolicyDev:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: 
+        Ref: S3WebStoreDev
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+            - 's3:GetObject'
+            Effect: Allow
+            Principal: "*"
+            Resource:
+              Fn::Sub:
+                - "arn:aws:s3:::${S3Bucket}/*"
+                - S3Bucket:
+                    Ref: S3WebStoreDev
+
+
+  WebDistributionProd:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          -
+            DomainName:
+              Fn::GetAtt: S3WebStoreProd.DomainName
+            Id:
+              Ref: S3WebStoreProd
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultRootObject: index.html
+        Enabled: true
+        DefaultCacheBehavior:
+          MinTTL: 86400
+          MaxTTL: 31536000
+          ForwardedValues:
+            QueryString: true
+          TargetOriginId:
+            Ref: S3WebStoreProd
+          ViewerProtocolPolicy: "redirect-to-https"
+          Compress: true
+        CustomErrorResponses:
+          - ErrorCachingMinTTL: 300
+            ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
+  WebDistributionDev:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          -
+            DomainName: 
+              Fn::GetAtt: S3WebStoreDev.DomainName
+            Id:
+              Ref: S3WebStoreDev
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultRootObject: index.html
+        Enabled: true
+        DefaultCacheBehavior:
+          MinTTL: 86400
+          MaxTTL: 31536000
+          ForwardedValues:
+            QueryString: true
+          TargetOriginId:
+            Ref: S3WebStoreDev
+          ViewerProtocolPolicy: "redirect-to-https"
+          Compress: true
+        CustomErrorResponses:
+          - ErrorCachingMinTTL: 300
+            ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+
+  CodeBuildProjectDev:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: Serverless-Build-Dev
+      Artifacts:
+        Type: CODEPIPELINE
+        Location: webAppCodepipelineDev
+      Description: 'CodeBuild project for deploying website automation pipeline'
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/nodejs:8.11.0
+      ServiceRole: 
+        Fn::GetAtt: CodeBuildRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Sub |
+          version: 0.1
+          phases:
+            pre_build:
+              commands:
+                - echo Installing source NPM dependencies...
+                - sudo npm install
+            build:
+              commands:
+                - echo Build started on `date`
+                - npm run build
+            post_build:
+              commands:
+                - aws s3 sync build/ s3://${S3WebStoreDev}
+                - >
+                  aws cloudfront create-invalidation --distribution-id ${WebDistributionDev}
+                  --paths /src/index.html
+              artifacts:
+                files:
+                  - '**/*'
+                base-directory: build
+  CodeBuildProjectProd:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: Serverless-Build-Prod
+      Artifacts:
+        Type: CODEPIPELINE
+        Location: webAppCodepipelineProd
+      Description: 'CodeBuild project for deploying website'
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/nodejs:8.11.0
+      ServiceRole: 
+        Fn::GetAtt: CodeBuildRole.Arn
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Sub |
+          version: 0.1
+          phases:
+            pre_build:
+              commands:
+                - echo Installing source NPM dependencies...
+                - sudo npm install
+            build:
+              commands:
+                - echo Build started on `date`
+                - npm run build
+            post_build:
+              commands:
+                - aws s3 sync build/ s3://${S3WebStoreProd}
+                - >
+                  aws cloudfront create-invalidation --distribution-id ${WebDistributionProd}
+                  --paths /src/index.html
+              artifacts:
+                files:
+                  - '**/*'
+                base-directory: build
+
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [codebuild.amazonaws.com]
+      Path: /service-role/
+      Policies:
+        - PolicyName: CodeBuildAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - 's3:GetObject'
+                - 's3:GetObjectVersion'
+                - 's3:GetBucketVersioning'
+                - 's3:PutObject'
+                - 's3:PutObjectAcl'
+                - 's3:ListBucket'
+                - 'logs:*'
+                - 'cloudfront:CreateInvalidation'
+                - 's3:ListObjects'
+                - 'ssm:GetParameters'
+                Effect: Allow
+                Resource: '*'
+
+  webAppCodepipelineProd:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn:
+        Fn::GetAtt: CodePipelineRole.Arn
+      ArtifactStore:
+        Location:
+          Ref: PipelineBucket
+        Type: S3
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              OutputArtifacts:
+                - 
+                  Name: MyApp
+              Configuration:
+                BranchName: master
+                RepositoryName:
+                  Ref: CodecommitRepo
+                PollForSourceChanges: true
+              RunOrder: 1
+        -
+          Name: Build
+          Actions:
+            -
+              Name: WebAppBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              InputArtifacts:
+                -
+                  Name: MyApp
+              OutputArtifacts:
+                -
+                  Name: MyAppBuild
+              Configuration:
+                ProjectName: 
+                  Ref: CodeBuildProjectProd
+  webAppCodepipelineDev:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: 
+        Fn::GetAtt: CodePipelineRole.Arn
+      ArtifactStore:
+        Location:
+          Ref: PipelineBucket
+        Type: S3
+      Stages:
+        -
+          Name: Source
+          Actions:
+            -
+              Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              OutputArtifacts:
+                - 
+                  Name: MyApp
+              Configuration:
+                BranchName: dev
+                RepositoryName:
+                  Ref: CodecommitRepo
+                PollForSourceChanges: true
+              RunOrder: 1
+        -
+          Name: Build
+          Actions:
+            -
+              Name: WebAppBuild
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              InputArtifacts:
+                -
+                  Name: MyApp
+              OutputArtifacts:
+                -
+                  Name: MyAppBuild
+              Configuration:
+                ProjectName: 
+                  Ref: CodeBuildProjectDev
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [codepipeline.amazonaws.com]
+      Path: /
+      Policies:
+        - PolicyName: CodePipelinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - 's3:GetObject'
+                - 's3:GetObjectVersion'
+                - 's3:GetBucketVersioning'
+                - 's3:PutObject'
+                Effect: Allow
+                Resource:
+                  - Fn::GetAtt: PipelineBucket.Arn
+                  - Fn::Join:
+                     ['', [Fn::GetAtt: PipelineBucket.Arn, '/*']]
+              - Action:
+                - 'codebuild:BatchGetBuilds'
+                - 'codebuild:StartBuild'
+                - 'codecommit:GetRepository'
+                - 'codecommit:GetBranch'
+                - 'codecommit:GetCommit'
+                - 'codecommit:UploadArchive'
+                - 'codecommit:GetUploadArchiveStatus'
+                Effect: Allow
+                Resource: '*'
+  PipelineBucket:
+    Type: AWS::S3::Bucket
+    Properties: {}
