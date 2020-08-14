@@ -2,17 +2,14 @@ Parameters:
   WebBucketName:
     Type: String
     Description: Enter a name for the S3 bucket hosting web content.
-    Default: rbrtdnh
   
   CloudfrontAlias:
     Type: String
     Description: Enter an alias for your cloudfront distributions
-    Default: dev.rbrtdnh.com
   
   CodecommitRepo:
     Type: String
     Description: Enter the name of the Codecommit repository associated with your web content.
-    Default: robdnh-portfolio-site
     
 Resources:
   S3WebStoreProd:
